@@ -1,0 +1,19 @@
+makefile = { SOI ~ (task | var | empty)* ~ EOI }
+
+task = { ident ~ ":" ~ deps ~ comment? ~ eol ~ body }
+deps = {(ident ~ ws*)*}
+var  = { ident ~ eq ~ anyRest ~ comment? ~ eol }
+
+empty = _{ comment? ~ NEWLINE }
+
+body    =  { ("\t" ~ line ~ eol)* }
+line    =  { (!NEWLINE ~ ANY)+ }
+anyRest =  { (!NEWLINE ~ !"#" ~ ANY)+ }
+comment = _{ "#" ~ (!NEWLINE ~ ANY)+ }
+
+ident = @{ ('a'..'z' | 'A'..'Z' | '0'..'9' | "_" | "-" | ".")+ }
+eq    = { "=" | "?=" }
+
+WHITESPACE = _{ " " | "\\\n" }
+ws         = _{ " " | "\t" | "\\\n" }
+eol        = _{ NEWLINE | EOI }

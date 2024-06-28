@@ -1,209 +1,201 @@
-use post::split_kind;
+use std::{collections::HashMap, env, fs, io};
 
-fn main() {
-    let sample = include_str!("../Makefile");
-    let (_, terms) = grammar::makefile(&sample).unwrap();
-    let (tasks, vars) = split_kind(terms);
-    for (k, v) in tasks.iter() {
-        println!("{}: {}\n{}", k, v.deps.join(", "), v.body)
-    }
-    // println!("{:#?}", tasks);
-}
+use ast::Term;
+use pest::{iterators::Pair, Parser};
+use pest_derive::Parser;
+use regex::{Captures, Regex};
 
-mod post {
-    use std::collections::HashMap;
+pub mod ast;
 
-    use crate::grammar::{self, Term};
+#[derive(Parser)]
+#[grammar = "makefile.pest"]
+pub struct MakefileParser;
 
-    #[derive(Debug, PartialEq, Eq)]
-    pub struct Variable<'a> {
-        pub name: &'a str,
-        pub value: &'a str,
-        pub eq: &'a str,
-    }
+fn parse(data: &str) -> Vec<Term> {
+    let file = MakefileParser::parse(Rule::makefile, data)
+        .unwrap()
+        .next()
+        .unwrap();
 
-    #[derive(Debug, PartialEq, Eq)]
-    pub struct Task<'a> {
-        pub phony: bool,
-        pub name: &'a str,
-        pub deps: Vec<&'a str>,
-        pub body: &'a str,
-    }
+    let mut out = vec![];
+    for term in file.into_inner() {
+        match term.as_rule() {
+            Rule::task => {
+                let mut inner_rules = term.into_inner();
+                let name = inner_rules.next().unwrap().as_str();
 
-    fn convert_task<'a>(phonies: &Vec<&str>, task: grammar::Task<'a>) -> Task<'a> {
-        assert!(task.name != ".PHONY");
-        Task {
-            phony: phonies.contains(&task.name),
-            name: task.name,
-            deps: task.deps,
-            body: task.body,
-        }
-    }
+                let mut deps = vec![];
+                let mut body = vec![];
 
-    fn convert_variable(var: grammar::Variable) -> Variable {
-        Variable {
-            name: var.name,
-            value: var.value,
-            eq: var.eq,
-        }
-    }
-
-    pub fn split_kind<'a>(
-        terms: Vec<grammar::Term<'a>>,
-    ) -> (HashMap<&'a str, Task>, HashMap<&'a str, Variable>) {
-        let mut tasks = HashMap::new();
-        let mut vars = HashMap::new();
-        let phonies = terms
-            .iter()
-            .filter_map(|t| match t {
-                Term::Task(task) if task.name == ".PHONY" => Some(task.deps.clone()),
-                _ => None,
-            })
-            .flatten()
-            .collect();
-
-        for term in terms {
-            match term {
-                Term::Variable(v) => {
-                    vars.insert(v.name, convert_variable(v));
-                }
-                Term::Task(t) if t.name == ".PHONY" => {}
-                Term::Task(t) if tasks.contains_key(t.name) => {
-                    let out: &mut Task = tasks.get_mut(t.name).unwrap();
-                    out.deps.append(&mut t.deps.clone());
-                    if !t.body.is_empty() {
-                        out.body = t.body;
+                for t in inner_rules {
+                    match t.as_rule() {
+                        Rule::body => body = t.into_inner().map(|v| v.as_str()).collect(),
+                        Rule::deps => deps = t.into_inner().map(|v| v.as_str()).collect(),
+                        _ => (),
                     }
                 }
-                // tasks[t.name] = convert_task(phonies, t)
-                Term::Task(t) => {
-                    tasks.insert(t.name, convert_task(&phonies, t));
-                }
-            }
-        }
 
-        (tasks, vars)
+                out.push(Term::Task { name, deps, body })
+            }
+            Rule::var => {
+                let inner_rules = term.into_inner();
+                let [name, eq, val]: [Pair<'_, Rule>; 3] =
+                    inner_rules.collect::<Vec<_>>().try_into().unwrap();
+
+                out.push(Term::Var(name.as_str(), eq.as_str(), val.as_str()))
+            }
+            Rule::EOI => (),
+            _ => unreachable!(),
+        }
+    }
+
+    return out;
+}
+
+#[derive(Debug)]
+struct Var<'a>(&'a str, &'a str, &'a str);
+#[derive(Debug)]
+struct Task<'a> {
+    phony: bool,
+    name: &'a str,
+    deps: Vec<&'a str>,
+    body: Vec<&'a str>,
+}
+
+fn task_from_ast<'a>(
+    phonies: &Vec<&str>,
+    name: &'a str,
+    deps: Vec<&'a str>,
+    body: Vec<&'a str>,
+) -> Task<'a> {
+    Task {
+        phony: phonies.contains(&name),
+        name,
+        deps,
+        body,
     }
 }
 
-mod grammar {
-    use nom::{
-        branch::alt,
-        bytes::complete::{is_a, is_not, tag, take_until},
-        character::complete::{alpha1, alphanumeric1, multispace0, newline, one_of},
-        combinator::{recognize, value},
-        error::ParseError,
-        multi::{many0, many0_count, many1, separated_list0},
-        sequence::{delimited, pair, preceded, terminated, tuple},
-        IResult, Parser,
+fn from_ast(terms: Vec<Term>) -> (HashMap<&str, Task>, HashMap<&str, Var>) {
+    let empty = vec![];
+    let phonies: Vec<&str> = {
+        terms
+            .iter()
+            .flat_map(|t| match t {
+                Term::Task {
+                    name: ".PHONY",
+                    deps,
+                    ..
+                } => deps,
+                _ => &empty,
+            })
+            .map(|v| *v)
+            .collect()
     };
 
-    #[derive(Debug, PartialEq, Eq)]
-    pub struct Variable<'a> {
-        pub name: &'a str,
-        pub value: &'a str,
-        pub eq: &'a str,
-    }
+    let mut tasks = HashMap::new();
+    let mut vars = HashMap::new();
 
-    #[derive(Debug, PartialEq, Eq)]
-    pub struct Task<'a> {
-        pub name: &'a str,
-        pub deps: Vec<&'a str>,
-        pub body: &'a str,
-    }
-
-    #[derive(Debug, PartialEq, Eq)]
-    pub enum Term<'a> {
-        Variable(Variable<'a>),
-        Task(Task<'a>),
-    }
-
-    fn identifier(input: &str) -> IResult<&str, &str> {
-        let allowed_symbols = b"asd";
-        recognize(pair(
-            alt((alpha1, recognize(one_of("_.-")))),
-            many0_count(alt((alphanumeric1, recognize(one_of("_.-"))))),
-        ))
-        .parse(input)
-    }
-
-    fn comment<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&str, &str, E> {
-        recognize(pair(tag("#"), is_not("\n\r"))).parse(input)
-    }
-
-    fn ws<'a, F, O, E>(inner: F) -> impl Parser<&'a str, O, E>
-    where
-        F: Parser<&'a str, O, E>,
-        E: ParseError<&'a str>,
-    {
-        delimited(multispace0, inner, multispace0)
-    }
-
-    fn line<'a, F, O, E>(inner: F) -> impl Parser<&'a str, O, E>
-    where
-        F: Parser<&'a str, O, E>,
-        E: ParseError<&'a str>,
-    {
-        terminated(inner, tuple((take_until("\n"), tag("\n"))))
-    }
-
-    fn wsenl<'a, F, O, E>(inner: F) -> impl Parser<&'a str, O, E>
-    where
-        F: Parser<&'a str, O, E>,
-        E: ParseError<&'a str>,
-    {
-        let wsn = value((), many0(alt((tag(" "), tag("\t"), tag("\\\n")))));
-        preceded(wsn, inner)
-    }
-
-    fn ignore<'a, F, O, E>(inner: F) -> impl Parser<&'a str, O, E>
-    where
-        F: Parser<&'a str, O, E>,
-        E: ParseError<&'a str>,
-    {
-        delimited(multispace0, inner, ws(comment))
-    }
-
-    fn variable(input: &str) -> IResult<&str, Term> {
-        let eq = alt((tag("="), tag("?=")));
-        tuple((identifier, ws(eq), is_not("#\n\r")))
-            .map(|(name, eq, value)| Term::Variable(Variable { name, value, eq }))
-            .parse(input)
-    }
-
-    fn task(input: &str) -> IResult<&str, Term> {
-        let deps = line(separated_list0(wsenl(tag(",")), identifier));
-        let indent = many1(alt((tag("\t"), tag("  "))));
-        let body = recognize(many0(line(preceded(indent, is_not("\n")))));
-        tuple((identifier, ws(tag(":")), deps, body))
-            .map(|(name, _, deps, body)| Term::Task(Task { name, deps, body }))
-            .parse(input)
-    }
-
-    fn term(input: &str) -> IResult<&str, Term> {
-        let (mut rest, out) = ws(alt((variable, task))).parse(input)?;
-        if let Ok((r, _)) = comment::<nom::error::Error<&str>>(rest) {
-            rest = r;
-        };
-        Ok((rest, out))
-    }
-
-    pub fn makefile(input: &str) -> IResult<&str, Vec<Term>> {
-        many0(term).parse(input)
-    }
-
-    #[cfg(test)]
-    mod test {
-        use super::*;
-
-        #[test]
-        fn test_identifier() {
-            assert_eq!(identifier("foo"), Ok(("", "foo")));
-            assert_eq!(identifier("foo_bar"), Ok(("", "foo_bar")));
-            assert_eq!(identifier("foo123"), Ok(("", "foo123")));
-            assert_eq!(identifier("_foo"), Ok(("", "_foo")));
-            assert_eq!(identifier("_foo_bar"), Ok(("", "_foo_bar")));
-            assert_eq!(identifier("_foo123"), Ok(("", "_foo123")));
+    for t in terms {
+        match t {
+            Term::Var(name, eq, val) => {
+                vars.insert(name, Var(name, eq, val));
+            }
+            Term::Task {
+                name,
+                mut deps,
+                body,
+            } if name != ".PHONY" => {
+                match tasks.get_mut(name) {
+                    Some(t) => {
+                        let t: &mut Task = t;
+                        t.deps.append(&mut deps);
+                    }
+                    None => {
+                        tasks.insert(name, task_from_ast(&phonies, name, deps, body));
+                    }
+                };
+            }
+            _ => (),
         }
+    }
+
+    (tasks, vars)
+}
+
+struct IDGen {
+    uuid: i64,
+}
+
+impl IDGen {
+    fn new() -> Self {
+        IDGen { uuid: 0 }
+    }
+    fn next(&mut self) -> String {
+        let id = self.uuid;
+        self.uuid += 1;
+
+        format!("id{}", self.uuid)
+    }
+}
+
+struct SubGraph {
+    name: String,
+    nodes: Vec<Node>,
+}
+
+struct Node {
+    id: String,
+    label: String,
+    children: Vec<String>,
+}
+
+impl Node {
+    fn new(id_provider: &mut IDGen, label: String) -> Self {
+        Self {
+            id: id_provider.next(),
+            label,
+            children: vec![],
+        }
+    }
+}
+
+fn main() -> io::Result<()> {
+    let re_var = Regex::new(r"\$\{\s*(\w+)\s*\}").unwrap();
+
+    let args: Vec<String> = env::args().collect();
+    assert!(args.len() == 2);
+    let path: &str = &args[1];
+
+    let file = fs::read_to_string(path)?;
+    let terms = parse(&file);
+    let (tasks, vars) = from_ast(terms);
+
+    println!("strict graph {{");
+    for (_, task) in tasks {
+        for dep in task.deps {
+            println!("\t\"{}\" -- \"{}\"", task.name, dep);
+        }
+        let external_deps = task.body.iter().filter(|l| l.contains("@make"));
+        for dep in external_deps {
+            let out = re_var.replace(dep, |caps: &Captures| match vars.get(&caps[1]) {
+                Some(v) => v.2.to_string(),
+                None => caps[0].to_string(),
+            });
+            println!("\t# {}", out);
+        }
+    }
+    println!("}}");
+
+    Ok(())
+}
+
+#[test]
+fn calculator1() {
+    let parser = |v| MakefileParser::parse(Rule::var, v);
+    let inputs = ["CLUSTER_NAME ?= asd", "REGISTRY_NAME = 123"];
+    for input in inputs {
+        let out = parser(input);
+        println!("Here: {:#?}", out.unwrap())
     }
 }
