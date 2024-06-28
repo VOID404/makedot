@@ -3,6 +3,7 @@ name: Rust Release Build
 on:
   release:
     types: [published]
+    branches: [master]
 
 jobs:
   build:
