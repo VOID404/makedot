@@ -1,18 +1,23 @@
-makefile = { SOI ~ (task | var | empty)* ~ EOI }
+makefile = { SOI ~ (task | var | empty | shit)* ~ EOI }
 
 task = { ident ~ ":" ~ deps ~ comment? ~ eol ~ body }
-deps = {(ident ~ ws*)*}
+deps = { (ident | ws)* }
 var  = { ident ~ eq ~ anyRest ~ comment? ~ eol }
 
 empty = _{ comment? ~ NEWLINE }
 
-body    =  { ("\t" ~ line ~ eol)* }
+body    =  { (("\t" ~ line ~ eol) | (comment ~ eol))* }
 line    =  { (!NEWLINE ~ ANY)+ }
 anyRest =  { (!NEWLINE ~ !"#" ~ ANY)+ }
 comment = _{ "#" ~ (!NEWLINE ~ ANY)+ }
 
-ident = @{ ('a'..'z' | 'A'..'Z' | '0'..'9' | "_" | "-" | ".")+ }
-eq    = { "=" | "?=" }
+ident = @{ "$("? ~ ('a'..'z' | 'A'..'Z' | '0'..'9' | "_" | "-" | ".")+ ~ ")"? }
+eq    =  { "=" | "?=" }
+
+shit    = _{ ifs | define | include }
+ifs     = _{ ("ifneq" | "ifeq" | "ifndef") ~ (!"endif" ~ ANY)+ ~ "endif" }
+define  = _{ "define" ~ (!"endef" ~ ANY)+ ~ "endef" }
+include = _{ "include" ~ (!eol ~ ANY)+ ~ eol }
 
 WHITESPACE = _{ " " | "\\\n" }
 ws         = _{ " " | "\t" | "\\\n" }
