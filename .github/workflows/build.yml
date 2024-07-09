@@ -1,0 +1,49 @@
+name: Build
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: "Build ${{ matrix.platform.target }}"
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+    steps:
+      - name: checkout
+        uses: actions/checkout@v1
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+            toolchain: stable
+            default: true
+            target: ${{ matrix.platform.target }}
+      - name: Build artifacts
+        run: |
+          echo "::group::Cargo build"
+          cargo build --target ${{ matrix.platform.target }} --release
+          echo ::endgroup::
+
+          echo ::group::tar
+          tar -C target/${{ matrix.platform.target }}/release/ -czvf makedot-${{ matrix.platform.target }}.tar.gz makedot${{ runner.os == 'Windows' && '.exe' || '' }}
+          echo ::endgroup::
+      - name: Upload Release Assets
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        uses: softprops/action-gh-release@v1
+        with:
+          files: '*.tar.gz'
+          token: ${{ secrets.GITHUB_TOKEN }}
