@@ -9,6 +9,10 @@ makedot ./hack/ci/Makefile | dot -T svg -o ./graph.svg
 
 ![graph of dependencies](resources/graph.svg)
 
+## Downloading binary
+Binaries are attached to [releases](https://github.com/VOID404/makedot/releases/latest).
+Direct downloads for various targets can be found under: `https://github.com/VOID404/makedot/releases/latest/download/makedot-x86_64-unknown-linux-gnu.tar.gz`
+
 ## Building from source
 ```sh
 # optionally select tag with --branch v0.1.0 
