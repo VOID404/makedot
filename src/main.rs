@@ -18,6 +18,8 @@ fn main() {
         std::process::exit(1);
     });
 
+    eprintln!("Starting at {}", path);
+
     let (makefiles, externals) = Makefile::walk_from(path);
 
     let mut id = IDGen::new("cluster_");
