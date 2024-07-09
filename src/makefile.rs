@@ -8,7 +8,7 @@ use regex::Regex;
 
 use crate::{
     ast::{self, Parse as _},
-    parser,
+    parser, Error,
 };
 
 type ID = String;
@@ -17,7 +17,7 @@ type Variables = HashMap<String, String>;
 macro_rules! regex {
     ($re:literal $(,)?) => {{
         static RE: OnceLock<regex::Regex> = OnceLock::new();
-        RE.get_or_init(|| regex::Regex::new($re).unwrap())
+        RE.get_or_init(|| regex::Regex::new($re).expect("Invalid regex!"))
     }};
 }
 
@@ -76,7 +76,9 @@ impl Makefile {
             .find(|(_, t)| t.name == name)
             .map(|(id, _)| id)
     }
-    pub fn walk_from(path: impl AsRef<Path>) -> (Vec<Makefile>, HashSet<External<PathBuf>>) {
+    pub fn walk_from(
+        path: impl AsRef<Path>,
+    ) -> Result<(Vec<Makefile>, HashSet<External<PathBuf>>), crate::Error> {
         let path = path.as_ref().to_path_buf();
         let mut out = Vec::new();
         let mut idgen = IDGen::new("task");
@@ -86,26 +88,32 @@ impl Makefile {
         while let Some(path) = paths.pop_front() {
             eprintln!("Parsing {}", path.display());
             let mut exts = HashSet::new();
-            let data = std::fs::read_to_string(&path).unwrap();
-            let terms = parser::Makefile::parse(&data).unwrap();
+            let data = std::fs::read_to_string(&path)?;
+            let terms = parser::Makefile::parse(&data).map_err(|e| Error::from_nom(&data, e))?;
             let m = Makefile::from_terms(&mut idgen, &mut exts, path, terms);
-            let exts = exts.iter().map(|e| {
-                e.clone().map_path(|p| {
-                    let p = m.resolve_makefile(p);
-                    if !(paths.contains(&p) || out.iter().any(|m: &Makefile| m.file == p)) {
-                        paths.push_back(p.clone());
+            let exts = exts.iter().filter_map(|e| {
+                let path = &e.path;
+                let path = match m.resolve_makefile(path) {
+                    Ok(p) => p,
+                    Err(err) => {
+                        eprintln!("Couldn't resolve makefile: {}, {}", path.0, err);
+                        return None;
                     }
-                    p
-                })
+                };
+                if !(paths.contains(&path) || out.iter().any(|m: &Makefile| m.file == path)) {
+                    paths.push_back(path.clone());
+                }
+
+                Some(e.clone().map_path(|_| path))
             });
             external.extend(exts);
             out.push(m);
         }
 
-        (out, external)
+        Ok((out, external))
     }
 
-    pub fn resolve_vars(&self, str: VarStr) -> String {
+    pub fn resolve_vars(&self, str: &VarStr) -> String {
         let re_var = regex!(r"\$\{([^}]+)\}");
         let out = re_var
             .replace_all(&str.0, |v: &regex::Captures| {
@@ -115,20 +123,27 @@ impl Makefile {
             .into_owned();
         out
     }
-    pub fn resolve_makefile(&self, path: VarStr) -> PathBuf {
+    pub fn resolve_makefile(&self, path: &VarStr) -> Result<PathBuf, crate::Error> {
         let path = self
             .file
             .parent()
-            .expect(format!("invalid path: {}", self.file.to_string_lossy()).as_str())
+            .ok_or(Error::PathErr(format!(
+                "Makefile path has no parent: {}",
+                self.file.display()
+            )))?
             .join(self.resolve_vars(path));
-        let mut path = path
-            .canonicalize()
-            .expect(format!("could not canonicalize path: {}", path.to_string_lossy()).as_str());
+        let mut path = path.canonicalize().map_err(|err| {
+            Error::PathErr(format!(
+                "Couldn't canonicalize {},\n{}",
+                path.display(),
+                err
+            ))
+        })?;
         if path.is_dir() {
             path.push("Makefile");
         }
 
-        path
+        Ok(path)
     }
     pub fn from_terms(
         id: &mut IDGen,

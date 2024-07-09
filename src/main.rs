@@ -1,18 +1,34 @@
-use std::{
-    collections::{HashMap, HashSet},
-    env::args,
-    path::PathBuf,
-};
+use std::env::args;
 
-use ast::{Parse as _, Term};
 use makefile::{IDGen, Makefile};
-use nom::error::convert_error;
+use nom::error::VerboseError;
+use thiserror::Error;
 
 mod ast;
 mod makefile;
 mod parser;
 
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("IO error: {0}")]
+    IO(#[from] std::io::Error),
+
+    #[error("Parsing error:\n{0}")]
+    ParseErr(String),
+
+    #[error("{0}")]
+    PathErr(String),
+}
+
+impl Error {
+    pub fn from_nom(source: &str, err: nom::error::VerboseError<&str>) -> Self {
+        let str = nom::error::convert_error(source, err);
+        Self::ParseErr(str)
+    }
+}
+
 fn main() {
+    // TODO: clap arg parser
     let path = args().nth(1).unwrap_or_else(|| {
         eprintln!("Usage: {} <makefile>", args().next().unwrap());
         std::process::exit(1);
@@ -20,7 +36,13 @@ fn main() {
 
     eprintln!("Starting at {}", path);
 
-    let (makefiles, externals) = Makefile::walk_from(path);
+    let (makefiles, externals) = match Makefile::walk_from(path) {
+        Ok(v) => v,
+        Err(err) => {
+            eprintln!("Error walking makefile:\n{}", err);
+            std::process::exit(1);
+        }
+    };
 
     let mut id = IDGen::new("cluster_");
     println!("digraph G {{\n\tranksep=3");

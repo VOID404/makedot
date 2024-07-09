@@ -11,7 +11,7 @@ use nom::{
 
 use crate::ast::{self, Task, Term, Variable};
 
-type ParseErr<'a> = VerboseError<&'a str>;
+pub type ParseErr<'a> = VerboseError<&'a str>;
 type ParseResult<'a, O> = nom::IResult<&'a str, O, ParseErr<'a>>;
 
 fn hspace0<'a>(tab: bool) -> impl Parser<&'a str, (), ParseErr<'a>> {
