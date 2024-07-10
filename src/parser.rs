@@ -14,18 +14,22 @@ use crate::ast::{self, Task, Term, Variable};
 pub type ParseErr<'a> = VerboseError<&'a str>;
 type ParseResult<'a, O> = nom::IResult<&'a str, O, ParseErr<'a>>;
 
+fn enl(input: &str) -> ParseResult<()> {
+    value((), pair(char('\\'), nl)).parse(input)
+}
+
 fn hspace0<'a>(tab: bool) -> impl Parser<&'a str, (), ParseErr<'a>> {
     macro_rules! hst {
         () => {};
     }
     let hst = value(
         (),
-        many0_count(alt((value((), tag("\\\n")), value((), one_of(" \t"))))),
+        many0_count(alt((value((), enl), value((), one_of(" \t"))))),
     );
 
     let hsnt = value(
         (),
-        many0_count(alt((value((), tag("\\\n")), value((), one_of(" \t"))))),
+        many0_count(alt((value((), enl), value((), one_of(" \t"))))),
     );
     match tab {
         true => hst,
@@ -36,12 +40,12 @@ fn hspace0<'a>(tab: bool) -> impl Parser<&'a str, (), ParseErr<'a>> {
 fn hspace1<'a>(tab: bool) -> impl Parser<&'a str, (), ParseErr<'a>> {
     let hst = value(
         (),
-        many1_count(alt((value((), tag("\\\n")), value((), one_of(" \t"))))),
+        many1_count(alt((value((), enl), value((), one_of(" \t"))))),
     );
 
     let hsnt = value(
         (),
-        many1_count(alt((value((), tag("\\\n")), value((), one_of(" \t"))))),
+        many1_count(alt((value((), enl), value((), one_of(" \t"))))),
     );
     match tab {
         true => hst,
@@ -70,7 +74,7 @@ fn comment<'a>(input: &'a str) -> ParseResult<()> {
             (), // Output is thrown away.
             pair(
                 ws0(char('#')),
-                many0_count(alt((value((), tag("\\\n")), value((), none_of("\n\r"))))),
+                many0_count(alt((value((), enl), value((), none_of("\n\r"))))),
             ),
         ),
     )
@@ -93,7 +97,7 @@ fn rest(input: &str) -> ParseResult<&str> {
     context(
         "rest of line",
         recognize(many0_count(alt((
-            value((), tag("\\\n")),
+            value((), enl),
             value((), none_of("\n\r#")),
         )))),
     )
@@ -184,7 +188,17 @@ fn eol(input: &str) -> ParseResult<()> {
     if input.is_empty() {
         return Ok((input, ()));
     }
-    value((), char('\n')).parse(input)
+    value((), nl).parse(input)
+}
+
+#[cfg(target_family = "windows")]
+fn nl(input: &str) -> ParseResult<()> {
+    value((), tag("\r\n"))(input)
+}
+
+#[cfg(not(target_family = "windows"))]
+fn nl(input: &str) -> ParseResult<()> {
+    value((), tag("\n"))(input)
 }
 
 pub struct Makefile;
